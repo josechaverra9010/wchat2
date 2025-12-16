@@ -27,6 +27,8 @@ NGROK_DOMAIN = os.getenv("NGROK_DOMAIN") # No default needed, as it's checked be
 
 # ALLOWED_HOSTS corregido y simplificado
 ALLOWED_HOSTS = [
+    'wchat2.onrender.com', # The domain where your app is hosted
+    '.onrender.com',
     "127.0.0.1",
     "localhost",
 ]
