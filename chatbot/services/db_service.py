@@ -1,5 +1,5 @@
 """
-Servicio para consultar la base de datos de Ébano Company
+Servicio para consultar la base de datos de Ébano Company - VERSIÓN CORREGIDA
 """
 import logging
 from django.db import connection
@@ -21,14 +21,32 @@ class DatabaseService:
             Cliente object o None
         """
         try:
+            logger.info(f"🔍 Buscando cliente - Teléfono: {telefono}, Email: {email}, Nombre: {nombre}")
+            
             if telefono:
-                return Cliente.objects.filter(telefono__icontains=telefono).first()
+                # Limpiar el número de teléfono (quitar espacios, guiones, etc.)
+                telefono_limpio = ''.join(filter(str.isdigit, telefono))
+                cliente = Cliente.objects.filter(telefono__icontains=telefono_limpio).first()
+                if cliente:
+                    logger.info(f"✅ Cliente encontrado por teléfono: {cliente.nombre}")
+                    return cliente
+                    
             if email:
-                return Cliente.objects.filter(email__iexact=email).first()
+                cliente = Cliente.objects.filter(email__iexact=email).first()
+                if cliente:
+                    logger.info(f"✅ Cliente encontrado por email: {cliente.nombre}")
+                    return cliente
+                    
             if nombre:
-                return Cliente.objects.filter(nombre__icontains=nombre).first()
+                cliente = Cliente.objects.filter(nombre__icontains=nombre).first()
+                if cliente:
+                    logger.info(f"✅ Cliente encontrado por nombre: {cliente.nombre}")
+                    return cliente
+            
+            logger.info("ℹ️ No se encontró cliente")
         except Exception as e:
-            logger.error(f"Error buscando cliente: {e}")
+            logger.error(f"❌ Error buscando cliente: {e}", exc_info=True)
+        
         return None
     
     @staticmethod
@@ -45,6 +63,8 @@ class DatabaseService:
             QuerySet de productos
         """
         try:
+            logger.info(f"📦 Listando productos - Categoría: {categoria}, Disponibles: {disponibles}, Limit: {limit}")
+            
             query = Producto.objects.filter(activo=True)
             
             if categoria:
@@ -53,9 +73,12 @@ class DatabaseService:
             if disponibles:
                 query = query.filter(stock__gt=0)
             
-            return query.order_by('-fecha_creacion')[:limit]
+            productos = list(query.order_by('-fecha_creacion')[:limit])
+            logger.info(f"✅ Productos encontrados: {len(productos)}")
+            
+            return productos
         except Exception as e:
-            logger.error(f"Error listando productos: {e}")
+            logger.error(f"❌ Error listando productos: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -67,13 +90,18 @@ class DatabaseService:
             QuerySet de productos
         """
         try:
-            return Producto.objects.filter(
+            logger.info(f"🔍 Buscando producto por nombre: {nombre}")
+            
+            productos = Producto.objects.filter(
                 Q(nombre__icontains=nombre) | Q(descripcion__icontains=nombre),
                 activo=True
             )
+            
+            logger.info(f"✅ Productos encontrados: {productos.count()}")
+            return productos
         except Exception as e:
-            logger.error(f"Error buscando producto: {e}")
-            return []
+            logger.error(f"❌ Error buscando producto: {e}", exc_info=True)
+            return Producto.objects.none()
     
     @staticmethod
     def obtener_producto_por_id(producto_id):
@@ -84,11 +112,15 @@ class DatabaseService:
             Producto object o None
         """
         try:
-            return Producto.objects.get(id=producto_id, activo=True)
+            logger.info(f"🔍 Obteniendo producto ID: {producto_id}")
+            producto = Producto.objects.get(id=producto_id, activo=True)
+            logger.info(f"✅ Producto encontrado: {producto.nombre}")
+            return producto
         except Producto.DoesNotExist:
+            logger.info(f"ℹ️ Producto ID {producto_id} no existe")
             return None
         except Exception as e:
-            logger.error(f"Error obteniendo producto: {e}")
+            logger.error(f"❌ Error obteniendo producto: {e}", exc_info=True)
             return None
     
     @staticmethod
@@ -101,9 +133,11 @@ class DatabaseService:
         """
         try:
             producto = Producto.objects.get(id=producto_id)
-            return producto.stock >= cantidad
+            hay_stock = producto.stock >= cantidad
+            logger.info(f"📊 Stock verificado - Producto {producto_id}: {producto.stock} (necesita {cantidad}) = {hay_stock}")
+            return hay_stock
         except Exception as e:
-            logger.error(f"Error verificando stock: {e}")
+            logger.error(f"❌ Error verificando stock: {e}", exc_info=True)
             return False
     
     @staticmethod
@@ -115,11 +149,14 @@ class DatabaseService:
             QuerySet de pedidos
         """
         try:
-            return Pedido.objects.filter(
+            logger.info(f"📋 Obteniendo pedidos del cliente ID: {cliente_id}")
+            pedidos = list(Pedido.objects.filter(
                 cliente_id=cliente_id
-            ).order_by('-fecha_pedido')[:limit]
+            ).order_by('-fecha_pedido')[:limit])
+            logger.info(f"✅ Pedidos encontrados: {len(pedidos)}")
+            return pedidos
         except Exception as e:
-            logger.error(f"Error obteniendo pedidos: {e}")
+            logger.error(f"❌ Error obteniendo pedidos: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -131,18 +168,22 @@ class DatabaseService:
             Dict con información del pedido
         """
         try:
+            logger.info(f"📋 Obteniendo detalle del pedido ID: {pedido_id}")
             pedido = Pedido.objects.select_related('cliente').get(id=pedido_id)
             detalles = DetallePedido.objects.filter(pedido=pedido).select_related('producto')
             
+            logger.info(f"✅ Detalle encontrado - {detalles.count()} items")
+            
             return {
                 'pedido': pedido,
-                'detalles': detalles,
+                'detalles': list(detalles),
                 'total_items': detalles.count()
             }
         except Pedido.DoesNotExist:
+            logger.info(f"ℹ️ Pedido ID {pedido_id} no existe")
             return None
         except Exception as e:
-            logger.error(f"Error obteniendo detalle pedido: {e}")
+            logger.error(f"❌ Error obteniendo detalle pedido: {e}", exc_info=True)
             return None
     
     @staticmethod
@@ -154,12 +195,15 @@ class DatabaseService:
             List de categorías
         """
         try:
+            logger.info("🏷️ Obteniendo categorías")
             categorias = Producto.objects.filter(
                 activo=True
             ).values_list('categoria', flat=True).distinct()
-            return [c for c in categorias if c]
+            categorias_lista = [c for c in categorias if c]
+            logger.info(f"✅ Categorías encontradas: {categorias_lista}")
+            return categorias_lista
         except Exception as e:
-            logger.error(f"Error obteniendo categorías: {e}")
+            logger.error(f"❌ Error obteniendo categorías: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -171,6 +215,8 @@ class DatabaseService:
             QuerySet de productos
         """
         try:
+            logger.info(f"💰 Buscando productos por precio - Min: {precio_min}, Max: {precio_max}")
+            
             query = Producto.objects.filter(activo=True, stock__gt=0)
             
             if precio_min is not None:
@@ -179,9 +225,12 @@ class DatabaseService:
             if precio_max is not None:
                 query = query.filter(precio__lte=precio_max)
             
-            return query.order_by('precio')[:limit]
+            productos = list(query.order_by('precio')[:limit])
+            logger.info(f"✅ Productos en rango de precio: {len(productos)}")
+            
+            return productos
         except Exception as e:
-            logger.error(f"Error buscando por precio: {e}")
+            logger.error(f"❌ Error buscando por precio: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -190,18 +239,23 @@ class DatabaseService:
         Obtener productos más vendidos
         
         Returns:
-            QuerySet de productos con cantidad vendida
+            Lista de productos con cantidad vendida
         """
         try:
+            logger.info(f"⭐ Obteniendo productos más vendidos (limit: {limit})")
+            
             productos = DetallePedido.objects.values(
                 'producto__id', 'producto__nombre', 'producto__precio'
             ).annotate(
                 total_vendido=Sum('cantidad')
             ).order_by('-total_vendido')[:limit]
             
-            return list(productos)
+            productos_lista = list(productos)
+            logger.info(f"✅ Productos populares encontrados: {len(productos_lista)}")
+            
+            return productos_lista
         except Exception as e:
-            logger.error(f"Error obteniendo productos más vendidos: {e}")
+            logger.error(f"❌ Error obteniendo productos más vendidos: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -213,15 +267,22 @@ class DatabaseService:
             Dict con estadísticas
         """
         try:
-            pedidos = Pedido.objects.filter(cliente_id=cliente_id)
+            logger.info(f"📊 Obteniendo estadísticas del cliente ID: {cliente_id}")
             
-            return {
+            pedidos = Pedido.objects.filter(cliente_id=cliente_id)
+            total_gastado = pedidos.aggregate(Sum('total'))['total__sum'] or 0
+            
+            stats = {
                 'total_pedidos': pedidos.count(),
-                'total_gastado': pedidos.aggregate(Sum('total'))['total__sum'] or 0,
+                'total_gastado': total_gastado,
                 'ultimo_pedido': pedidos.order_by('-fecha_pedido').first()
             }
+            
+            logger.info(f"✅ Estadísticas: {stats['total_pedidos']} pedidos, ${stats['total_gastado']}")
+            
+            return stats
         except Exception as e:
-            logger.error(f"Error obteniendo estadísticas: {e}")
+            logger.error(f"❌ Error obteniendo estadísticas: {e}", exc_info=True)
             return None
     
     @staticmethod
@@ -237,13 +298,16 @@ class DatabaseService:
             Lista de resultados
         """
         try:
+            logger.info(f"🔧 Ejecutando consulta SQL personalizada")
             with connection.cursor() as cursor:
                 cursor.execute(query, params or [])
                 columns = [col[0] for col in cursor.description]
-                return [
+                resultados = [
                     dict(zip(columns, row))
                     for row in cursor.fetchall()
                 ]
+                logger.info(f"✅ Consulta ejecutada: {len(resultados)} resultados")
+                return resultados
         except Exception as e:
-            logger.error(f"Error en consulta raw: {e}")
+            logger.error(f"❌ Error en consulta raw: {e}", exc_info=True)
             return []
