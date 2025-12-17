@@ -1,5 +1,5 @@
 """
-Views para manejar webhook de WhatsApp - VERSION CON DEBUG MEJORADO
+Views para manejar webhook de WhatsApp - VERSIÓN CORREGIDA
 """
 import logging
 import json
@@ -195,7 +195,7 @@ def handle_webhook(request):
 
 def process_message(message_data, value):
     """
-    Procesa un mensaje individual
+    Procesa un mensaje individual - VERSIÓN CORREGIDA
     """
     try:
         # Extraer datos
@@ -274,7 +274,7 @@ def process_message(message_data, value):
         if message_type == 'text':
             logger.info("         🤖 Generando respuesta con Gemini...")
             
-            # Gemini
+            # Gemini - AHORA CON PHONE_NUMBER
             gemini_service = GeminiService()
             recent_messages = conversation.get_recent_messages(limit=5)
             context = "\n".join([
@@ -282,7 +282,12 @@ def process_message(message_data, value):
                 for msg in reversed(list(recent_messages))
             ])
             
-            response_text = gemini_service.get_response(content, context)
+            # ✅ CORRECCIÓN: Pasar el número de teléfono
+            response_text = gemini_service.get_response(
+                content, 
+                context, 
+                phone_number=from_number  # <-- AQUÍ ESTABA EL PROBLEMA
+            )
             logger.info(f"         💡 Respuesta generada: {response_text[:100]}...")
             
             # Enviar por WhatsApp
@@ -320,10 +325,10 @@ def status(request):
     return JsonResponse({
         'status': 'online',
         'service': 'WhatsApp Chatbot',
-        'version': '1.0.0',
+        'version': '2.0.0 - CORREGIDA',
         'configuration': {
             'verify_token_configured': bool(settings.META_VERIFY_TOKEN),
-            'verify_token_value': settings.META_VERIFY_TOKEN,  # Para debugging
+            'verify_token_value': settings.META_VERIFY_TOKEN,
             'whatsapp_configured': bool(settings.META_PHONE_NUMBER_ID and settings.META_ACCESS_TOKEN),
             'phone_number_id': settings.META_PHONE_NUMBER_ID[:10] + '...' if settings.META_PHONE_NUMBER_ID else 'Not set',
             'access_token_length': len(settings.META_ACCESS_TOKEN) if settings.META_ACCESS_TOKEN else 0,
