@@ -18,33 +18,24 @@ load_dotenv()
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production-xyz123')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# IMPORTANT: Convert the environment variable string to a boolean properly.
-# 'True' or '1' is True, anything else is False.
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 
 # Dominio ngrok dinámico
-NGROK_DOMAIN = os.getenv("NGROK_DOMAIN") # No default needed, as it's checked below
+NGROK_DOMAIN = os.getenv("NGROK_DOMAIN")
 
-# ALLOWED_HOSTS corregido y simplificado
+# ALLOWED_HOSTS
 ALLOWED_HOSTS = [
-    'wchat2.onrender.com', # The domain where your app is hosted
-    '.onrender.com',
     "127.0.0.1",
     "localhost",
 ]
 
-# Agregar dominio ngrok si existe y aceptar subdominios *.ngrok-free.app
-# **IMPROVEMENT**: It's safer to only add NGROK_DOMAIN if it's explicitly set.
 if NGROK_DOMAIN:
     ALLOWED_HOSTS.append(NGROK_DOMAIN)
 
-# Aceptar el dominio ngrok con el wildcard (it's safe as ngrok manages it)
 ALLOWED_HOSTS.append(".ngrok-free.app")
 
-# Permitir desde el entorno si existe
 ENV_ALLOWED = os.getenv("ALLOWED_HOSTS")
 if ENV_ALLOWED:
-    # Ensure no empty strings from split (e.g., if env var is "host1,,host2")
     ALLOWED_HOSTS.extend([h.strip() for h in ENV_ALLOWED.split(",") if h.strip()])
 
 
@@ -92,11 +83,19 @@ TEMPLATES = [
 WSGI_APPLICATION = 'whatsapp_project.wsgi.application'
 
 
-# --- Database ---
+# --- Database Configuration ---
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': os.getenv('DB_NAME', 'u659323332_ebano_company'),
+        'USER': os.getenv('DB_USER', 'u659323332_ebano_admin'),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '3306'),
+        'OPTIONS': {
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+            'charset': 'utf8mb4',
+        },
     }
 }
 
@@ -120,12 +119,12 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # --- Internationalization ---
 LANGUAGE_CODE = 'es-es'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'America/Bogota'
 USE_I18N = True
 USE_TZ = True
 
 
-# --- Static files (CSS, JavaScript, Images) ---
+# --- Static files ---
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
@@ -165,14 +164,10 @@ LOGGING = {
     },
 }
 
-# --- CSRF Configuration para webhook ---
-# CSRF_TRUSTED_ORIGINS should ONLY be used for HTTPS origins
+# --- CSRF Configuration ---
 CSRF_TRUSTED_ORIGINS = []
 
-# Add NGROK_DOMAIN to CSRF_TRUSTED_ORIGINS for development if it exists
 if NGROK_DOMAIN and DEBUG:
-    # Ensure it starts with https:// for the Meta webhook to work correctly
     CSRF_TRUSTED_ORIGINS.append(f"https://{NGROK_DOMAIN}")
 elif not DEBUG:
-    # Agregar tu dominio en producción
     CSRF_TRUSTED_ORIGINS = ['https://tu-dominio.com']

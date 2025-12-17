@@ -1,9 +1,10 @@
 """
-Servicio para interactuar con Google Gemini AI
+Servicio para interactuar con Google Gemini AI - INTEGRADO CON BASE DE DATOS
 """
 import logging
 import google.generativeai as genai
 from django.conf import settings
+from .db_service import DatabaseService
 
 logger = logging.getLogger('chatbot')
 
@@ -12,9 +13,10 @@ class GeminiService:
     
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
+        self.db_service = DatabaseService()
         
         if not self.api_key:
-            logger.warning("Api de Gemnini sin configurar")
+            logger.warning("API de Gemini sin configurar")
             return
         
         # Configurar Gemini
@@ -55,13 +57,83 @@ class GeminiService:
             safety_settings=self.safety_settings
         )
     
-    def get_response(self, message, context=None):
+    def _extraer_informacion_db(self, message):
         """
-        Generar respuesta usando Gemini
+        Extraer información relevante de la base de datos según el mensaje
+        
+        Returns:
+            String con contexto de la base de datos
+        """
+        context = ""
+        message_lower = message.lower()
+        
+        try:
+            # Buscar productos
+            if any(word in message_lower for word in ['producto', 'productos', 'catálogo', 'precio', 'stock', 'disponible']):
+                productos = self.db_service.listar_productos(limit=5)
+                if productos:
+                    context += "\n\n📦 **PRODUCTOS DISPONIBLES:**\n"
+                    for p in productos:
+                        context += f"• {p.nombre} - ${p.precio:,.0f} (Stock: {p.stock}) - {p.categoria}\n"
+            
+            # Buscar por nombre de producto específico
+            palabras = message_lower.split()
+            for palabra in palabras:
+                if len(palabra) > 3:  # Evitar palabras muy cortas
+                    productos_busqueda = self.db_service.buscar_producto(palabra)
+                    if productos_busqueda and not context.__contains__("PRODUCTOS DISPONIBLES"):
+                        context += "\n\n🔍 **PRODUCTOS ENCONTRADOS:**\n"
+                        for p in productos_busqueda[:3]:
+                            context += f"• {p.nombre} - ${p.precio:,.0f} (Stock: {p.stock})\n"
+                            if p.descripcion:
+                                context += f"  {p.descripcion[:100]}...\n"
+                        break
+            
+            # Buscar categorías
+            if 'categoría' in message_lower or 'categorias' in message_lower:
+                categorias = self.db_service.obtener_categorias()
+                if categorias:
+                    context += "\n\n🏷️ **CATEGORÍAS DISPONIBLES:**\n"
+                    context += ", ".join(categorias)
+            
+            # Productos más vendidos
+            if 'popular' in message_lower or 'vendido' in message_lower or 'recomendación' in message_lower:
+                populares = self.db_service.productos_mas_vendidos(limit=3)
+                if populares:
+                    context += "\n\n⭐ **PRODUCTOS MÁS POPULARES:**\n"
+                    for p in populares:
+                        context += f"• {p['producto__nombre']} - ${p['producto__precio']:,.0f} ({p['total_vendido']} vendidos)\n"
+            
+            # Búsqueda por rango de precio
+            if 'precio' in message_lower and any(char.isdigit() for char in message):
+                # Extraer números del mensaje
+                import re
+                numeros = re.findall(r'\d+', message)
+                if numeros:
+                    precio_ref = int(numeros[0])
+                    productos_precio = self.db_service.buscar_productos_por_precio(
+                        precio_min=precio_ref * 0.8,
+                        precio_max=precio_ref * 1.2,
+                        limit=3
+                    )
+                    if productos_precio:
+                        context += f"\n\n💰 **PRODUCTOS CERCA DE ${precio_ref:,.0f}:**\n"
+                        for p in productos_precio:
+                            context += f"• {p.nombre} - ${p.precio:,.0f}\n"
+        
+        except Exception as e:
+            logger.error(f"Error extrayendo información DB: {e}")
+        
+        return context
+    
+    def get_response(self, message, context=None, phone_number=None):
+        """
+        Generar respuesta usando Gemini con contexto de base de datos
         
         Args:
             message: Mensaje del usuario
-            context: Contexto de conversación previo (opcional)
+            context: Contexto de conversación previo
+            phone_number: Número de teléfono del usuario
         
         Returns:
             Respuesta generada por Gemini
@@ -70,93 +142,60 @@ class GeminiService:
             return "Lo siento, el servicio de IA no está configurado correctamente."
         
         try:
+            # Extraer información de la base de datos
+            db_context = self._extraer_informacion_db(message)
+            
+            # Información del cliente si se proporciona teléfono
+            cliente_info = ""
+            if phone_number:
+                cliente = self.db_service.buscar_cliente(telefono=phone_number)
+                if cliente:
+                    stats = self.db_service.estadisticas_cliente(cliente.id)
+                    cliente_info = f"\n\n👤 **INFORMACIÓN DEL CLIENTE:**\n"
+                    cliente_info += f"Nombre: {cliente.nombre}\n"
+                    cliente_info += f"Email: {cliente.email}\n"
+                    if stats:
+                        cliente_info += f"Total pedidos: {stats['total_pedidos']}\n"
+                        cliente_info += f"Total gastado: ${stats['total_gastado']:,.0f}\n"
+            
             # Construir prompt con contexto
-            system_prompt = """Eres un asistente virtual útil y amigable en WhatsApp.
-Tu nombre es Parchabot y estás aquí para ayudar a los usuarios.
+            system_prompt = """Eres un asistente virtual de Ébano Company, especializado en ayudar a los clientes con información sobre productos, pedidos y servicios.
+
+Tu nombre es Parchabot y estás aquí para brindar la mejor atención al cliente.
 
 Características:
 - Eres educado, profesional y conciso
-- Respondes en español de forma natural con lenguaje nativo de Quibdó, Chocó
-- Si no sabes algo, lo admites honestamente
-- Evitas respuestas muy largas (máximo 1-2 parrafos)
-- Usas emojis cuando es apropiado para ser más amigable
+- Respondes en español con lenguaje nativo de Quibdó, Chocó
+- Usas la información de la base de datos para dar respuestas precisas
+- Si no encuentras información específica, lo admites honestamente
+- Evitas respuestas muy largas (máximo 2-3 párrafos)
+- Usas emojis para ser más amigable
+- Cuando muestres precios, usa formato colombiano: $50.000
 
-INFORMACIÓN PRINCIPAL:
-parchaoo es una plataforma sobre venta de boletería para eventos, nativas del Chocó.
-parchaoo funciona de una forma muy sencilla: solo debes registrarte y empezar a vender tus boletos si eres un colaborador o dueño de un evento. Si eres una persona que quiere asistir a un evento, solo eliges el evento, llenas los datos del pago y una vez confirmado el pago tus boletas serían enviadas a tu whatsapp, correo electrónico y se te enviará el código de tus boletas a través de un mensaje de texto SMS.
+INFORMACIÓN DE LA EMPRESA:
+Ébano Company es una empresa dedicada a ofrecer productos de calidad a nuestros clientes.
 
-CONOCIMIENTO SOBRE QUIBDÓ, CHOCÓ:
+{cliente_info}
 
-🏨 RESTAURANTES Y LUGARES DE COMIDA:
-- **Al Carbón**: Restaurante de comida de excelente calidad, especializado en carnes y parrillas
-- **Andrés Parrilla**: Los mejores asados de la ciudad, reconocido por su calidad
-- **Restaurante Chocó Pacífico**: Comida típica chocoana, especialidad en pescado
-- **La Fogata**: Parrillada y comida típica
-- **Donde Pipe**: Comida rápida local muy popular
-- **Piqueteadero El Buen Gusto**: Fritangas y comida típica
-- **Delicias del Mar**: Especialidad en mariscos y pescado fresco del Pacífico
-
-🏛️ LUGARES TURÍSTICOS:
-- **Catedral de San Francisco de Asís**: Principal iglesia de la ciudad, arquitectura imponente
-- **Malecón del Atrato**: Paseo junto al río, ideal para caminar y disfrutar del paisaje
-- **Parque Centenario**: Punto de encuentro, eventos culturales y recreación
-- **Puente César Gaviria Trujillo**: Conecta Quibdó con el resto del país
-- **Monumento al Cristo Rey**: Mirador con vista panorámica de la ciudad
-- **Barrio Pandeyuca**: Zona cultural con casas típicas palafíticas
-- **Playa de Tutunendo**: A 30 minutos, ideal para paseos de río
-- **Cascadas del Río Munguidó**: Belleza natural cerca de la ciudad
-
-🎭 CENTROS CULTURALES:
-- **Casa de la Cultura**: Eventos, exposiciones y talleres artísticos
-- **Teatro Municipal**: Presentaciones y eventos culturales
-- **Centro Cultural del Chocó**: Música, danza y arte afrocolombiano
-
-🏪 CENTROS COMERCIALES Y COMPRAS:
-- **Centro Comercial Arauca**: Principal centro comercial
-- **Mercado del Río**: Productos locales, frutas, pescado fresco
-- **Calle del Comercio**: Zona comercial principal con tiendas variadas
-
-🏞️ NATURALEZA Y ECOTURISMO:
-- **Jardín Botánico del Pacífico**: Flora y fauna de la región
-- **Reserva Natural Río Atrato**: Avistamiento de aves y biodiversidad
-- **Comunidades indígenas**: Tours culturales con Embera
-
-🎵 CULTURA Y FESTIVIDADES:
-- **Festival de San Pacho** (Septiembre): La fiesta más grande del Pacífico colombiano
-- **Festival de Música del Pacífico Petronio Álvarez**: Celebración de la música afro
-- **Chirimía y Alabaos**: Música tradicional del Chocó
-
-🏨 HOTELES Y HOSPEDAJE:
-- **Hotel La Cascada**
-- **Hotel Ciudadela del Río**
-- **Hotel El Barco**
-- **Hotel los farallones**
-- **Hostales y posadas familiares** en el centro
-
-🚕 TRANSPORTE:
-- Mototaxis: Principal medio de transporte urbano
-- Lanchas: Para transporte fluvial por el río Atrato
-- Terminal de Transportes: Buses interdepartamentales
-
-⚽ DEPORTE Y RECREACIÓN:
-- **Estadio Antonio Bolaños Puerta**: Fútbol local
-- **Polideportivos** municipales
-- **Ciclovía dominical** en vías principales
-
-INSTRUCCIONES ESPECIALES:
-- Si te preguntan por comida y no es sobre Quibdó, responde: "No somos una plataforma de comida, somos una plataforma de boletería para eventos. Si quieres pedir comida en Quibdó, te recomiendo Al Carbón (excelente calidad) o Andrés Parrilla (los mejores asados) 🍖"
-- Cuando te pregunten quién es la cabra, di que es Imanol
-- Siempre que menciones lugares, sé específico y da detalles útiles
-- Si no tienes información sobre un lugar específico, admítelo pero sugiere alternativas similares
+{db_context}
 
 Contexto de la conversación anterior:
 {context}
 
 Usuario dice: {message}
 
-Responde de forma natural y útil, usando lenguaje nativo de Quibdó, Chocó:"""
+INSTRUCCIONES:
+- Si te preguntan por productos, usa la información de la base de datos
+- Si mencionan precios o stock, verifica los datos actuales
+- Si preguntan por pedidos, ofrece consultar su historial
+- Sé específico con los datos (nombres, precios, stock)
+- Si la información no está disponible, ofrece alternativas
+
+Responde de forma natural y útil:"""
             
             prompt = system_prompt.format(
+                cliente_info=cliente_info,
+                db_context=db_context,
                 context=context if context else "No hay conversación previa",
                 message=message
             )
@@ -164,9 +203,8 @@ Responde de forma natural y útil, usando lenguaje nativo de Quibdó, Chocó:"""
             # Generar respuesta
             response = self.model.generate_content(prompt)
             
-            # Verificar si hay respuesta
             if response.text:
-                logger.info(f"Respuesta de Gemini generada exitosamente")
+                logger.info(f"Respuesta de Gemini generada con contexto DB")
                 return response.text.strip()
             else:
                 logger.warning("Gemini no generó respuesta de texto")
@@ -176,13 +214,13 @@ Responde de forma natural y útil, usando lenguaje nativo de Quibdó, Chocó:"""
             logger.error(f"Error generando respuesta con Gemini: {str(e)}", exc_info=True)
             return "Lo siento, hubo un error al procesar tu mensaje. Por favor intenta de nuevo."
     
-    def get_response_with_history(self, messages_history):
+    def get_response_with_history(self, messages_history, phone_number=None):
         """
         Generar respuesta usando historial completo
         
         Args:
             messages_history: Lista de diccionarios con 'role' y 'content'
-                             Ejemplo: [{'role': 'user', 'content': 'Hola'}, ...]
+            phone_number: Número de teléfono del usuario
         
         Returns:
             Respuesta generada por Gemini
@@ -191,16 +229,24 @@ Responde de forma natural y útil, usando lenguaje nativo de Quibdó, Chocó:"""
             return "Lo siento, el servicio de IA no está configurado correctamente."
         
         try:
-            # Iniciar chat con historial
+            # Obtener último mensaje para contexto DB
+            last_message = messages_history[-1]['content'] if messages_history else ""
+            db_context = self._extraer_informacion_db(last_message)
+            
+            # Iniciar chat
             chat = self.model.start_chat(history=[])
             
-            # Agregar mensajes del historial
-            for msg in messages_history[:-1]:  # Todos menos el último
+            # Agregar contexto de base de datos al primer mensaje
+            if db_context and messages_history:
+                first_msg = f"{db_context}\n\n{messages_history[0]['content']}"
+                messages_history[0]['content'] = first_msg
+            
+            # Procesar historial
+            for msg in messages_history[:-1]:
                 if msg['role'] == 'user':
                     chat.send_message(msg['content'])
             
-            # Enviar último mensaje y obtener respuesta
-            last_message = messages_history[-1]['content']
+            # Enviar último mensaje
             response = chat.send_message(last_message)
             
             if response.text:
@@ -213,15 +259,7 @@ Responde de forma natural y útil, usando lenguaje nativo de Quibdó, Chocó:"""
             return "Lo siento, hubo un error al procesar tu mensaje."
     
     def analyze_sentiment(self, text):
-        """
-        Analizar el sentimiento de un texto
-        
-        Args:
-            text: Texto a analizar
-        
-        Returns:
-            Dict con sentiment ('positive', 'negative', 'neutral') y score
-        """
+        """Analizar sentimiento de un texto"""
         if not self.api_key:
             return {'sentiment': 'neutral', 'score': 0.5}
         
@@ -247,5 +285,5 @@ Sentimiento:"""
             return {'sentiment': sentiment, 'score': 0.5}
         
         except Exception as e:
-            logger.error(f"Error analizando sentimiento: {str(e)}")
+            logger.error(f"Error analizando sentimiento: {e}")
             return {'sentiment': 'neutral', 'score': 0.5}
