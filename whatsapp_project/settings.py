@@ -1,6 +1,3 @@
-"""
-Django settings for whatsapp_project project.
-"""
 
 import os
 from pathlib import Path
