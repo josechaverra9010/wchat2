@@ -85,7 +85,7 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.getenv('DB_NAME', 'u659323332_ebano_company'),
-        'USER': os.getenv('DB_USER', 'u659323332_ebano_admin'),
+        'USER': os.getenv('DB_USER', 'u659323332_ebano_company'),
         'PASSWORD': os.getenv('DB_PASSWORD', 'Ebano123*'),
         'HOST': os.getenv('DB_HOST', '82.197.82.29'),
         'PORT': os.getenv('DB_PORT', '3306'),
