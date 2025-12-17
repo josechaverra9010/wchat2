@@ -24,10 +24,7 @@ DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 NGROK_DOMAIN = os.getenv("NGROK_DOMAIN")
 
 # ALLOWED_HOSTS
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-]
+ALLOWED_HOSTS = ['*']
 
 if NGROK_DOMAIN:
     ALLOWED_HOSTS.append(NGROK_DOMAIN)
