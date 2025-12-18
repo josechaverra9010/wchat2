@@ -1,11 +1,11 @@
 """
-Servicio para interactuar con Google Gemini AI - VERSIÓN CORREGIDA
+Servicio para interactuar con Google Gemini AI - ESPECIALIZADO EN NEGOCIOS
 """
 import logging
-import re
 import google.generativeai as genai
 from django.conf import settings
 from .db_service import DatabaseService
+from datetime import datetime
 
 logger = logging.getLogger('chatbot')
 
@@ -28,7 +28,7 @@ class GeminiService:
             "temperature": 0.7,
             "top_p": 0.95,
             "top_k": 40,
-            "max_output_tokens": 1500,
+            "max_output_tokens": 1024,
         }
         
         # Configuración de seguridad
@@ -53,109 +53,174 @@ class GeminiService:
         
         # Inicializar modelo
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-exp",
+            model_name="gemini-2.5-flash",
             generation_config=self.generation_config,
             safety_settings=self.safety_settings
         )
     
-    def _extraer_informacion_db(self, message):
+    def _extraer_informacion_negocios(self, message):
         """
-        Extraer información relevante de la base de datos según el mensaje
+        Extraer información relevante de negocios según el mensaje
         
         Returns:
-            String con contexto de la base de datos
+            String con contexto de negocios
         """
         context = ""
         message_lower = message.lower()
         
-        logger.info("="*60)
-        logger.info("🔍 EXTRAYENDO INFORMACIÓN DE LA BASE DE DATOS")
-        logger.info(f"📝 Mensaje: {message}")
-        logger.info("="*60)
-        
         try:
-            # 1. SIEMPRE mostrar algunos productos (para cualquier consulta)
-            logger.info("📦 Consultando productos disponibles...")
-            productos_general = self.db_service.listar_productos(limit=10)
-            if productos_general:
-                context += "\n\n📦 **CATÁLOGO DE PRODUCTOS DISPONIBLES:**\n"
-                for p in productos_general:
-                    context += f"• ID: {p.id} | {p.nombre} - ${p.precio:,.0f} COP | Stock: {p.stock} | Categoría: {p.categoria or 'Sin categoría'}\n"
-                logger.info(f"✅ Se encontraron {len(productos_general)} productos")
-            else:
-                logger.warning("⚠️ No se encontraron productos en la base de datos")
+            # Palabras clave para búsqueda de negocios
+            keywords_negocios = ['negocio', 'tienda', 'local', 'restaurante', 'farmacia', 
+                                'panadería', 'supermercado', 'ferretería', 'dónde', 'donde',
+                                'panaderia', 'ferreteria']
             
-            # 2. Búsqueda específica por nombre de producto
-            palabras_clave = [palabra for palabra in message_lower.split() if len(palabra) > 3]
-            logger.info(f"🔑 Palabras clave para búsqueda: {palabras_clave}")
+            keywords_horarios = ['horario', 'abierto', 'cerrado', 'abre', 'cierra', 'hora', 
+                               'atiende', 'atención', 'atencion', 'funciona']
             
-            for palabra in palabras_clave:
-                productos_busqueda = self.db_service.buscar_producto(palabra)
-                if productos_busqueda.exists():
-                    context += f"\n\n🔍 **BÚSQUEDA: '{palabra.upper()}':**\n"
-                    for p in productos_busqueda[:5]:
-                        context += f"• {p.nombre} - ${p.precio:,.0f} COP (Stock: {p.stock})\n"
-                        if p.descripcion:
-                            context += f"  Descripción: {p.descripcion[:150]}...\n"
-                    logger.info(f"✅ Búsqueda '{palabra}': {productos_busqueda.count()} resultados")
+            keywords_ubicacion = ['ubicación', 'ubicacion', 'dirección', 'direccion', 'queda', 
+                                'está', 'esta', 'como llego', 'donde queda', 'barrio', 'cerca']
+            
+            keywords_productos = ['producto', 'vende', 'venden', 'precio', 'cuánto cuesta', 
+                                'cuanto cuesta', 'tiene', 'hay', 'servicio', 'venta']
+            
+            # Detectar categoría específica
+            categorias_map = {
+                'restaurante': ['restaurante', 'comida', 'comer', 'almuerzo', 'desayuno', 'comedor'],
+                'farmacia': ['farmacia', 'droguería', 'drogueria', 'medicina', 'medicamento'],
+                'supermercado': ['supermercado', 'mercado', 'tienda', 'viveres', 'víveres'],
+                'panadería': ['panadería', 'panaderia', 'pan', 'pandería'],
+                'ferretería': ['ferretería', 'ferreteria', 'herramienta', 'ferreteria'],
+                'ropa': ['ropa', 'boutique', 'vestido', 'zapato', 'calzado'],
+                'tecnología': ['celular', 'computador', 'tecnología', 'tecnologia', 'electrónica']
+            }
+            
+            categoria_detectada = None
+            for cat, keywords in categorias_map.items():
+                if any(kw in message_lower for kw in keywords):
+                    categoria_detectada = cat
                     break
             
-            # 3. Categorías disponibles
-            if any(word in message_lower for word in ['categoría', 'categorias', 'tipo', 'tipos', 'qué tienen']):
-                logger.info("🏷️ Consultando categorías...")
-                categorias = self.db_service.obtener_categorias()
-                if categorias:
-                    context += "\n\n🏷️ **CATEGORÍAS DISPONIBLES:**\n"
-                    context += ", ".join(categorias) + "\n"
-                    logger.info(f"✅ Categorías encontradas: {categorias}")
-            
-            # 4. Productos más vendidos / populares
-            if any(word in message_lower for word in ['popular', 'vendido', 'recomendación', 'recomienda', 'mejor']):
-                logger.info("⭐ Consultando productos populares...")
-                populares = self.db_service.productos_mas_vendidos(limit=5)
-                if populares:
-                    context += "\n\n⭐ **PRODUCTOS MÁS POPULARES:**\n"
-                    for p in populares:
-                        context += f"• {p['producto__nombre']} - ${p['producto__precio']:,.0f} COP ({p['total_vendido']} vendidos)\n"
-                    logger.info(f"✅ Productos populares: {len(populares)} encontrados")
-            
-            # 5. Búsqueda por rango de precio
-            numeros = re.findall(r'\d+', message)
-            if numeros and any(word in message_lower for word in ['precio', 'cuesta', 'vale', 'cuánto', 'cuanto']):
-                logger.info(f"💰 Búsqueda por precio: {numeros}")
-                precio_ref = int(numeros[0])
-                # Si el número es muy pequeño, asumimos miles
-                if precio_ref < 1000:
-                    precio_ref *= 1000
-                
-                productos_precio = self.db_service.buscar_productos_por_precio(
-                    precio_min=precio_ref * 0.5,
-                    precio_max=precio_ref * 1.5,
+            # Buscar negocios
+            if any(kw in message_lower for kw in keywords_negocios) or categoria_detectada:
+                negocios = self.db_service.buscar_negocios(
+                    query=message if len(message.split()) < 10 else None,
+                    categoria=categoria_detectada,
                     limit=5
                 )
-                if productos_precio:
-                    context += f"\n\n💰 **PRODUCTOS CERCA DE ${precio_ref:,.0f} COP:**\n"
-                    for p in productos_precio:
-                        context += f"• {p.nombre} - ${p.precio:,.0f} COP (Stock: {p.stock})\n"
-                    logger.info(f"✅ Productos por precio: {len(productos_precio)} encontrados")
+                
+                if negocios:
+                    context += "\n\n🏪 **NEGOCIOS DISPONIBLES:**\n"
+                    for neg in negocios:
+                        verificado = "✅" if neg.verificado else ""
+                        context += f"\n**{neg.nombre}** {verificado}\n"
+                        context += f"📍 {neg.direccion}"
+                        if neg.barrio:
+                            context += f" - {neg.barrio}"
+                        context += f"\n📞 {neg.telefono if neg.telefono else 'Sin teléfono'}\n"
+                        
+                        if neg.categoria:
+                            context += f"🏷️ {neg.categoria}\n"
+                        
+                        # Verificar si está abierto
+                        estado = self.db_service.verificar_negocio_abierto(neg.id)
+                        if estado['abierto'] is not None:
+                            emoji = "🟢" if estado['abierto'] else "🔴"
+                            context += f"{emoji} {estado['mensaje']}\n"
             
-            # 6. Stock específico
-            if any(word in message_lower for word in ['stock', 'disponible', 'hay', 'tienen']):
-                logger.info("📊 Mostrando información de stock...")
-                # Ya incluido en el catálogo general
+            # Información de horarios
+            if any(kw in message_lower for kw in keywords_horarios):
+                # Buscar negocio mencionado
+                palabras = message_lower.split()
+                for palabra in palabras:
+                    if len(palabra) > 4:
+                        negocios = self.db_service.buscar_negocios(query=palabra, limit=3)
+                        if negocios:
+                            for negocio in negocios:
+                                horarios = self.db_service.obtener_horarios_negocio(negocio.id)
+                                if horarios:
+                                    context += f"\n\n🕐 **HORARIOS DE {negocio.nombre.upper()}:**\n"
+                                    for h in horarios:
+                                        if h.cerrado:
+                                            context += f"• {h.dia_semana.capitalize()}: Cerrado\n"
+                                        else:
+                                            context += f"• {h.dia_semana.capitalize()}: {h.hora_apertura.strftime('%I:%M %p')} - {h.hora_cierre.strftime('%I:%M %p')}\n"
+                                            if h.notas:
+                                                context += f"  ℹ️ {h.notas}\n"
+                                    
+                                    # Estado actual
+                                    estado = self.db_service.verificar_negocio_abierto(negocio.id)
+                                    emoji = "🟢" if estado['abierto'] else "🔴"
+                                    context += f"\n{emoji} Ahora: {estado['mensaje']}\n"
+                            break
             
-            logger.info("="*60)
-            logger.info(f"📊 CONTEXTO GENERADO ({len(context)} caracteres)")
-            logger.info("="*60)
+            # Información de ubicación
+            if any(kw in message_lower for kw in keywords_ubicacion):
+                palabras = message_lower.split()
+                for palabra in palabras:
+                    if len(palabra) > 4:
+                        negocios = self.db_service.buscar_negocios(query=palabra, limit=2)
+                        if negocios:
+                            context += "\n\n📍 **UBICACIONES:**\n"
+                            for neg in negocios:
+                                context += f"\n**{neg.nombre}**\n"
+                                context += f"• Dirección: {neg.direccion}\n"
+                                if neg.barrio:
+                                    context += f"• Barrio: {neg.barrio}\n"
+                                if neg.referencia_ubicacion:
+                                    context += f"• Referencia: {neg.referencia_ubicacion}\n"
+                                if neg.telefono:
+                                    context += f"• Teléfono: {neg.telefono}\n"
+                            break
+            
+            # Información de productos/servicios
+            if any(kw in message_lower for kw in keywords_productos):
+                # Buscar primero el negocio
+                palabras = message_lower.split()
+                for palabra in palabras:
+                    if len(palabra) > 4:
+                        negocios = self.db_service.buscar_negocios(query=palabra, limit=2)
+                        if negocios:
+                            for negocio in negocios:
+                                productos = self.db_service.obtener_productos_negocio(negocio.id, limit=8)
+                                if productos:
+                                    context += f"\n\n🛍️ **PRODUCTOS/SERVICIOS DE {negocio.nombre.upper()}:**\n"
+                                    for p in productos:
+                                        destacado = "⭐" if p.destacado else "•"
+                                        context += f"{destacado} {p.nombre} - {p.get_precio_display()}\n"
+                                        if p.descripcion:
+                                            context += f"  {p.descripcion[:80]}...\n"
+                            break
+            
+            # Categorías disponibles
+            if 'categoría' in message_lower or 'categoria' in message_lower or 'tipos de negocio' in message_lower:
+                categorias = self.db_service.obtener_categorias_negocios()
+                if categorias:
+                    context += "\n\n🏷️ **CATEGORÍAS DISPONIBLES:**\n"
+                    if isinstance(categorias[0], str):
+                        context += ", ".join(categorias)
+                    else:
+                        for cat in categorias:
+                            emoji = cat.icono if hasattr(cat, 'icono') and cat.icono else "•"
+                            context += f"{emoji} {cat.nombre}\n"
+            
+            # Búsqueda por barrio
+            for palabra in message_lower.split():
+                if len(palabra) > 4:
+                    negocios_barrio = self.db_service.buscar_negocios_cercanos(barrio=palabra, limit=3)
+                    if negocios_barrio:
+                        context += f"\n\n🗺️ **NEGOCIOS EN {palabra.upper()}:**\n"
+                        for neg in negocios_barrio:
+                            context += f"• {neg.nombre} - {neg.direccion}\n"
+                        break
         
         except Exception as e:
-            logger.error(f"❌ Error extrayendo información DB: {e}", exc_info=True)
+            logger.error(f"Error extrayendo información de negocios: {e}")
         
         return context
     
     def get_response(self, message, context=None, phone_number=None):
         """
-        Generar respuesta usando Gemini con contexto de base de datos
+        Generar respuesta usando Gemini con contexto de negocios
         
         Args:
             message: Mensaje del usuario
@@ -169,89 +234,80 @@ class GeminiService:
             return "Lo siento, el servicio de IA no está configurado correctamente."
         
         try:
-            logger.info("="*80)
-            logger.info("🤖 GENERANDO RESPUESTA CON GEMINI")
-            logger.info(f"📱 Teléfono: {phone_number}")
-            logger.info(f"💬 Mensaje: {message}")
-            logger.info("="*80)
+            # Extraer información de la base de datos de negocios
+            db_context = self._extraer_informacion_negocios(message)
             
-            # Extraer información de la base de datos
-            db_context = self._extraer_informacion_db(message)
+            # Información adicional
+            hora_actual = datetime.now().strftime("%I:%M %p")
+            dia_actual = datetime.now().strftime("%A")
+            dias_es = {
+                'Monday': 'lunes', 'Tuesday': 'martes', 'Wednesday': 'miércoles',
+                'Thursday': 'jueves', 'Friday': 'viernes', 'Saturday': 'sábado', 'Sunday': 'domingo'
+            }
+            dia_actual = dias_es.get(dia_actual, dia_actual)
             
-            # Información del cliente si se proporciona teléfono
-            cliente_info = ""
-            if phone_number:
-                logger.info(f"👤 Buscando cliente con teléfono: {phone_number}")
-                cliente = self.db_service.buscar_cliente(telefono=phone_number)
-                if cliente:
-                    stats = self.db_service.estadisticas_cliente(cliente.id)
-                    cliente_info = f"\n\n👤 **INFORMACIÓN DEL CLIENTE:**\n"
-                    cliente_info += f"• Nombre: {cliente.nombre}\n"
-                    cliente_info += f"• Email: {cliente.email}\n"
-                    if stats:
-                        cliente_info += f"• Total pedidos: {stats['total_pedidos']}\n"
-                        cliente_info += f"• Total gastado: ${stats['total_gastado']:,.0f} COP\n"
-                    logger.info(f"✅ Cliente encontrado: {cliente.nombre}")
-                else:
-                    logger.info("ℹ️ Cliente no encontrado en la base de datos")
-            
-            # Construir prompt con contexto MEJORADO
-            system_prompt = """Eres **Parchabot**, el asistente virtual de **Ébano Company** en Quibdó, Chocó, Colombia.
+            # Construir prompt con contexto
+            system_prompt = """Eres Luisa, una asistente virtual especializada en ayudar a las personas de Quibdó, Chocó a encontrar información sobre negocios locales.
 
-Tu misión es ayudar a los clientes con información sobre productos, precios, stock, pedidos y cualquier consulta relacionada con la empresa.
+**TU MISIÓN:**
+- Ayudar a los usuarios a encontrar negocios, productos y servicios en Quibdó
+- Proporcionar información sobre horarios, ubicaciones y contactos
+- Ser amable, local y cercana al hablar (usa expresiones naturales de Quibdó)
+- Dar respuestas precisas basadas en la información de la base de datos
 
-**REGLAS IMPORTANTES:**
-1. **USA SIEMPRE LA INFORMACIÓN DE LA BASE DE DATOS** que se te proporciona abajo
-2. **NUNCA INVENTES** información sobre productos, precios o stock
-3. Si la información no está en la base de datos, dilo claramente
-4. Responde en español colombiano, como si fueras de Quibdó
-5. Sé amigable, usa emojis 😊 pero profesional
-6. Mantén respuestas CORTAS (máximo 3 párrafos)
-7. Cuando menciones precios, usa formato: $50.000 COP
-8. Si te preguntan por productos específicos, busca en el catálogo proporcionado
+**CARACTERÍSTICAS:**
+- Eres educada, amigable y profesional
+- Hablas español con acento y expresiones de Quibdó, Chocó
+- Usas emojis para ser más expresiva 😊
+- Das información concisa pero completa
+- Preguntas para clarificar cuando sea necesario
+- Si no tienes información, lo admites honestamente y ofreces alternativas
 
-**INFORMACIÓN DISPONIBLE DE LA BASE DE DATOS:**
+**INFORMACIÓN ACTUAL:**
+📅 Hoy es {dia_actual}
+🕐 Hora actual: {hora_actual}
+
+**INFORMACIÓN DE LA BASE DE DATOS:**
 {db_context}
 
-{cliente_info}
-
-**CONTEXTO DE LA CONVERSACIÓN:**
+**CONVERSACIÓN ANTERIOR:**
 {context}
 
-**MENSAJE ACTUAL DEL USUARIO:**
+**USUARIO DICE:**
 {message}
 
-**INSTRUCCIONES ESPECÍFICAS:**
-- Si pregunta por productos: menciona nombres, precios y stock del catálogo
-- Si pregunta por disponibilidad: revisa el stock en la información proporcionada
-- Si pregunta por categorías: usa las categorías de la base de datos
-- Si pregunta por precios: usa los precios exactos de la base de datos
-- Si pregunta por recomendaciones: sugiere productos del catálogo
+**INSTRUCCIONES IMPORTANTES:**
+1. Si el usuario pregunta por negocios, horarios o ubicaciones, usa la información de arriba
+2. Si preguntan si un lugar está abierto, verifica el estado mostrado
+3. Si piden productos específicos, menciona los que aparecen en la base de datos
+4. Si la información no está disponible, sugiere alternativas o pide más detalles
+5. Sé específica con direcciones, teléfonos y horarios
+6. Usa formato colombiano para precios: $50.000
+7. Mantén respuestas cortas y directas (máximo 2-3 párrafos)
+8. Si muestras varios negocios, preséntalos en lista clara
 
-**TU RESPUESTA (corta y directa usando la información de arriba):**"""
+**TU RESPUESTA (natural y conversacional):**"""
             
             prompt = system_prompt.format(
-                db_context=db_context if db_context else "⚠️ No hay productos en la base de datos",
-                cliente_info=cliente_info,
-                context=context if context else "Esta es la primera interacción",
+                dia_actual=dia_actual,
+                hora_actual=hora_actual,
+                db_context=db_context if db_context else "No hay información específica de la base de datos para esta consulta.",
+                context=context if context else "No hay conversación previa",
                 message=message
             )
-            
-            logger.info(f"📤 Enviando prompt a Gemini ({len(prompt)} caracteres)")
             
             # Generar respuesta
             response = self.model.generate_content(prompt)
             
             if response.text:
-                logger.info(f"✅ Respuesta generada: {response.text[:100]}...")
-                logger.info("="*80)
+                logger.info(f"Respuesta de Gemini generada con contexto de negocios")
                 return response.text.strip()
             else:
-                logger.warning("⚠️ Gemini no generó respuesta de texto")
+                logger.warning("Gemini no generó respuesta de texto")
                 return "Lo siento, no pude generar una respuesta en este momento."
         
         except Exception as e:
-            logger.error(f"❌ Error generando respuesta con Gemini: {str(e)}", exc_info=True)
+            logger.error(f"Error generando respuesta con Gemini: {str(e)}", exc_info=True)
             return "Lo siento, hubo un error al procesar tu mensaje. Por favor intenta de nuevo."
     
     def get_response_with_history(self, messages_history, phone_number=None):
@@ -271,7 +327,7 @@ Tu misión es ayudar a los clientes con información sobre productos, precios, s
         try:
             # Obtener último mensaje para contexto DB
             last_message = messages_history[-1]['content'] if messages_history else ""
-            db_context = self._extraer_informacion_db(last_message)
+            db_context = self._extraer_informacion_negocios(last_message)
             
             # Iniciar chat
             chat = self.model.start_chat(history=[])
